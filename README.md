@@ -1,6 +1,6 @@
 # Streaming Platform Network Analysis
 
-**CZ4015 Computer Networks Project**
+**CS204 Computer Networking**
 
 Comparing live streaming platform performance (YouTube Live, TikTok Live, Instagram Live, Twitch) from the **audience side**, across two stream types:
 - **Dynamic streams** (gaming content — high motion, variable bitrate)
