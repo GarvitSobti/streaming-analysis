@@ -1,0 +1,7 @@
+data/*.pcap
+results/*.csv
+results/*.png
+results/*.json
+__pycache__/
+*.pyc
+.DS_Store
