@@ -116,3 +116,12 @@ python analysis/visualize.py
 - CDN edge node varies — re-run on different days may hit different servers
 - Ads create separate connections — filter by `frame.len > 1200` to isolate video
 - Encrypted streams (QUIC/TLS) limit deep packet inspection; use frame-level metrics
+
+
+## Links to videos
+Dynamic video: https://www.youtube.com/watch?v=O3zmfntbSr8&t=600s
+Static video: https://www.youtube.com/live/OChp0jbyEbI?si=TYy555bRWdEuXad-&t=4200
+
+
+## Links to platforms
+Twitch: https://www.twitch.tv/raylight0331
