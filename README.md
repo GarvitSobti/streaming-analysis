@@ -125,3 +125,4 @@ Static video: https://www.youtube.com/live/OChp0jbyEbI?si=TYy555bRWdEuXad-&t=420
 
 ## Links to platforms
 Twitch: https://www.twitch.tv/raylight0331
+Youtube: [rtmp://a.rtmp.youtube.com/live2](https://youtube.com/live/Dvm-M6AP9Zg?feature=share)
