@@ -407,8 +407,15 @@ def interactive_single():
         duration = DEFAULT_DURATION
         warn(f"Invalid input — using default: {duration}s")
 
-    # ── Step 4: Server identification (optional) ──
-    step(4, "CDN Server identification (optional)")
+    # ── Step 4: Number of rounds ──
+    step(4, "Number of rounds")
+    rounds = prompt_non_negative_int("How many capture rounds for this platform/type?", default=1)
+    if rounds == 0:
+        warn("Rounds set to 0. Nothing to capture.")
+        return
+
+    # ── Step 5: Server identification (optional) ──
+    step(5, "CDN Server identification (optional)")
     info("If you already know the CDN IP, enter it below.")
     info("Otherwise, you can run automatic identification (requires the stream to be playing).")
 
@@ -424,23 +431,35 @@ def interactive_single():
     elif "Auto" in choice:
         server_ip = stage_identify_servers() or ""
 
-    # ── Step 5: Capture ──
-    step(5, "Packet capture")
-    pcap_path = stage_capture(platform, stream_type, server_ip, duration)
+    completed_pcaps = []
+    failed_rounds = []
 
-    if not pcap_path:
-        error("Capture failed — aborting.")
+    for round_idx in range(1, rounds + 1):
+        # ── Step 6: Capture ──
+        step(6, f"Packet capture (round {round_idx}/{rounds})")
+        pcap_path = stage_capture(platform, stream_type, server_ip, duration)
+
+        if not pcap_path:
+            error(f"Capture failed on round {round_idx}/{rounds}.")
+            failed_rounds.append(round_idx)
+            continue
+
+        # ── Step 7: Extract ──
+        step(7, f"Extract metrics (round {round_idx}/{rounds})")
+        if not stage_extract(pcap_path):
+            error("Extraction failed — you can retry manually:")
+            info(f"  bash analysis/extract_metrics.sh {pcap_path}")
+            failed_rounds.append(round_idx)
+            continue
+
+        completed_pcaps.append(pcap_path)
+
+    if not completed_pcaps:
+        error("No rounds completed successfully — skipping analysis.")
         return
 
-    # ── Step 6: Extract ──
-    step(6, "Extract metrics")
-    if not stage_extract(pcap_path):
-        error("Extraction failed — you can retry manually:")
-        info(f"  bash analysis/extract_metrics.sh {pcap_path}")
-        return
-
-    # ── Step 7: Analyze ──
-    step(7, "Analyze results")
+    # ── Step 8: Analyze ──
+    step(8, "Analyze results")
     if prompt_yn("Run full analysis now?"):
         stage_analyze()
 
@@ -450,9 +469,15 @@ def interactive_single():
 ║                     ✔  ALL DONE!                             ║
 ╚══════════════════════════════════════════════════════════════╝{RESET}
 
-  {BOLD}Pcap file :{RESET} {pcap_path}
+    {BOLD}Completed rounds:{RESET} {len(completed_pcaps)} / {rounds}
+    {BOLD}Last pcap file  :{RESET} {completed_pcaps[-1]}
   {BOLD}CSVs in   :{RESET} {RESULTS_DIR}/
   {BOLD}Charts in :{RESET} {RESULTS_DIR}/
+
+    {DIM}Captured files:{RESET}
+{chr(10).join([f'    - {path}' for path in completed_pcaps])}
+
+    {DIM}Failed rounds:{RESET} {failed_rounds if failed_rounds else 'None'}
 
   {DIM}To re-analyze all captures:{RESET}
     python analysis/analyze.py auto --results results/
