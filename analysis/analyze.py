@@ -424,7 +424,130 @@ def _safe(metrics: dict, *keys, default=np.nan):
     return d if d is not None else default
 
 
-def plot_comparison(all_results: list[dict], output_dir: str):
+def _mean_valid(values: list[float], default=np.nan):
+    """Mean over finite numeric values only."""
+    valid = [v for v in values if pd.notna(v)]
+    return float(np.mean(valid)) if valid else default
+
+
+def aggregate_results_by_group(all_results: list[dict]) -> list[dict]:
+    """
+    Aggregate captures into one result per (platform, stream_type) group.
+    This produces the required 2 stats per platform: dynamic and static.
+    """
+    grouped = defaultdict(list)
+    for r in all_results:
+        key = (r.get("platform", "unknown"), r.get("stream_type", "unknown"))
+        grouped[key].append(r)
+
+    aggregated = []
+
+    for (platform, stream_type), group in sorted(grouped.items()):
+        agg = {
+            "label": f"{platform}_{stream_type}",
+            "platform": platform,
+            "stream_type": stream_type,
+            "capture_count": len(group),
+        }
+
+        # RTT aggregation
+        rtt_means = [_safe(r, "rtt", "mean_ms") for r in group]
+        rtt_medians = [_safe(r, "rtt", "median_ms") for r in group]
+        rtt_p95 = [_safe(r, "rtt", "p95_ms") for r in group]
+        rtt_stds = [_safe(r, "rtt", "std_ms") for r in group]
+        rtt_counts = [
+            int(_safe(r, "rtt", "count", default=0))
+            for r in group
+            if pd.notna(_safe(r, "rtt", "count", default=np.nan))
+        ]
+        agg["rtt"] = {
+            "count": int(sum(rtt_counts)),
+            "mean_ms": _mean_valid(rtt_means),
+            "median_ms": _mean_valid(rtt_medians),
+            "p95_ms": _mean_valid(rtt_p95),
+            "std_ms": _mean_valid(rtt_stds),
+        }
+
+        # Handshake RTT aggregation
+        hs_means = [_safe(r, "handshake_rtt", "mean_ms") for r in group]
+        hs_counts = [
+            int(_safe(r, "handshake_rtt", "handshake_count", default=0))
+            for r in group
+            if pd.notna(_safe(r, "handshake_rtt", "handshake_count", default=np.nan))
+        ]
+        agg["handshake_rtt"] = {
+            "handshake_count": int(sum(hs_counts)),
+            "mean_ms": _mean_valid(hs_means),
+        }
+
+        # Jitter aggregation
+        jitter_std = [_safe(r, "jitter", "std_ms") for r in group]
+        jitter_mad = [_safe(r, "jitter", "mad_ms") for r in group]
+        jitter_rfc = [_safe(r, "jitter", "rfc3550_jitter_ms") for r in group]
+        jitter_p95 = [_safe(r, "jitter", "p95_delta_ms") for r in group]
+        jitter_counts = [
+            int(_safe(r, "jitter", "count", default=0))
+            for r in group
+            if pd.notna(_safe(r, "jitter", "count", default=np.nan))
+        ]
+        agg["jitter"] = {
+            "count": int(sum(jitter_counts)),
+            "std_ms": _mean_valid(jitter_std),
+            "mad_ms": _mean_valid(jitter_mad),
+            "rfc3550_jitter_ms": _mean_valid(jitter_rfc),
+            "p95_delta_ms": _mean_valid(jitter_p95),
+        }
+
+        # Bitrate aggregation
+        br_mean = [_safe(r, "bitrate", "mean_kbps") for r in group]
+        br_std = [_safe(r, "bitrate", "std_kbps") for r in group]
+        br_cv = [_safe(r, "bitrate", "cv") for r in group]
+        br_p5 = [_safe(r, "bitrate", "p5_kbps") for r in group]
+        br_p95 = [_safe(r, "bitrate", "p95_kbps") for r in group]
+        br_windows = [
+            int(_safe(r, "bitrate", "window_count", default=0))
+            for r in group
+            if pd.notna(_safe(r, "bitrate", "window_count", default=np.nan))
+        ]
+        agg["bitrate"] = {
+            "window_count": int(sum(br_windows)),
+            "mean_kbps": _mean_valid(br_mean),
+            "std_kbps": _mean_valid(br_std),
+            "cv": _mean_valid(br_cv),
+            "p5_kbps": _mean_valid(br_p5),
+            "p95_kbps": _mean_valid(br_p95),
+        }
+
+        # Protocol aggregation by summing bytes/packets across captures
+        proto_bytes = defaultdict(int)
+        proto_packets = defaultdict(int)
+        quic_pcts = []
+        for r in group:
+            proto = r.get("protocols", {})
+            for name in ("TCP", "UDP", "Other"):
+                entry = proto.get(name)
+                if isinstance(entry, dict):
+                    proto_bytes[name] += int(entry.get("bytes", 0) or 0)
+                    proto_packets[name] += int(entry.get("packets", 0) or 0)
+            q = proto.get("quic_pct_bytes", np.nan)
+            if pd.notna(q):
+                quic_pcts.append(float(q))
+
+        total_bytes = sum(proto_bytes.values())
+        protocols = {"quic_pct_bytes": _mean_valid(quic_pcts, default=0.0)}
+        for name in ("TCP", "UDP", "Other"):
+            b = proto_bytes[name]
+            p = proto_packets[name]
+            pct = (b / total_bytes * 100.0) if total_bytes > 0 else 0.0
+            protocols[name] = {"bytes": int(b), "packets": int(p), "pct": round(pct, 1)}
+        agg["protocols"] = protocols
+
+        aggregated.append(agg)
+
+    return aggregated
+
+
+def plot_comparison(all_results: list[dict], output_dir: str, time_series_source: list[dict] | None = None):
     """
     Generate a 2×2 comparison figure:
       [0,0] Mean RTT           [0,1] Jitter (std dev)
@@ -523,9 +646,11 @@ def plot_comparison(all_results: list[dict], output_dir: str):
     print(f"[+] Saved: {out2}")
 
     # ── Figure 3: Bitrate time-series overlay ─────────────────────────────────
+    source = time_series_source if time_series_source is not None else all_results
+
     fig3, axes3 = plt.subplots(1, 2, figsize=(14, 5), sharey=False)
     for stream_type, ax in zip(["dynamic", "static"], axes3):
-        subset = [r for r in all_results if r.get("stream_type") == stream_type]
+        subset = [r for r in source if r.get("stream_type") == stream_type]
         for r in subset:
             br = r.get("bitrate", {})
             if "error" in br or not br.get("series_kbps"):
@@ -640,26 +765,36 @@ def main():
                         clean[key] = val
                 json.dump(clean, f, indent=2)
 
+        # Aggregate runs so each platform has exactly two rows: dynamic + static
+        aggregated_results = aggregate_results_by_group(all_results)
+
         # ── Comparison summary table ──────────────────────────────────────────
         print("\n" + "="*75)
-        print(f"  {'Label':<30} {'RTT(ms)':>9} {'Jitter(ms)':>11} {'Br(Kbps)':>10} {'BrStd':>8} {'Proto'}")
+        print(f"  {'Label':<30} {'Runs':>5} {'RTT(ms)':>9} {'Jitter(ms)':>11} {'Br(Kbps)':>10} {'BrStd':>8} {'Proto'}")
         print("="*75)
-        for r in all_results:
+        for r in aggregated_results:
             rtt  = _safe(r, "rtt", "mean_ms")
             jit  = _safe(r, "jitter", "std_ms")
             br   = _safe(r, "bitrate", "mean_kbps")
             brs  = _safe(r, "bitrate", "std_kbps")
+            runs = r.get("capture_count", 0)
             tcp  = _safe(r, "protocols", "TCP", "pct")
             udp  = _safe(r, "protocols", "UDP", "pct")
             quic = _safe(r, "protocols", "quic_pct_bytes")
             proto_str = f"TCP:{tcp:.0f}% UDP:{udp:.0f}% QUIC:{quic:.0f}%" \
                         if not any(np.isnan(v) for v in [tcp, udp, quic]) else "N/A"
-            print(f"  {r['label']:<30} {rtt:>9.2f} {jit:>11.3f} {br:>10.1f} {brs:>8.1f}  {proto_str}")
+            print(f"  {r['label']:<30} {runs:>5d} {rtt:>9.2f} {jit:>11.3f} {br:>10.1f} {brs:>8.1f}  {proto_str}")
         print("="*75)
+
+        # Save grouped summary JSON used for platform-level comparisons
+        grouped_json = os.path.join(args.results, "platform_stream_averages.json")
+        with open(grouped_json, "w") as f:
+            json.dump(aggregated_results, f, indent=2)
+        print(f"[+] Grouped averages JSON: {grouped_json}")
 
         if not args.no_plots:
             print("\n[*] Generating comparison charts...")
-            plot_comparison(all_results, args.results)
+            plot_comparison(aggregated_results, args.results, time_series_source=all_results)
 
         print(f"\n[+] Done. Results in: {args.results}")
 
