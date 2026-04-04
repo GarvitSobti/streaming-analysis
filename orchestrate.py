@@ -240,7 +240,7 @@ def stage_identify_servers(duration=30):
     info(f"Make sure the stream is ALREADY PLAYING in your browser!")
     print()
 
-    cmd = f"sudo bash {ID_SERVERS} {duration}"
+    cmd = f"bash {ID_SERVERS} {duration}"
     rc, out, err = run_shell(cmd, cwd=str(SCRIPT_DIR), stream_output=True)
 
     if rc != 0:
@@ -268,7 +268,7 @@ def stage_capture(platform, stream_type, server_ip="", duration=DEFAULT_DURATION
 
     # Build the capture command
     ip_arg = f'"{server_ip}"' if server_ip else '""'
-    cmd = f'sudo bash "{CAPTURE_SH}" {platform} {ip_arg} {duration} {stream_type}'
+    cmd = f'bash "{CAPTURE_SH}" {platform} {ip_arg} {duration} {stream_type}'
 
     print(f"  {YELLOW}{BOLD}{'━' * 58}{RESET}")
     print(f"  {YELLOW}{BOLD}  🎬  GO OPEN THE VIDEO NOW!{RESET}")
