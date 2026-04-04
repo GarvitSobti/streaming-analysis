@@ -150,6 +150,19 @@ def prompt_yn(text, default=True):
     return raw.lower() in ("y", "yes", "")
 
 
+def prompt_non_negative_int(text, default=0):
+    """Prompt until user provides a non-negative integer."""
+    while True:
+        raw = prompt(text, str(default))
+        try:
+            value = int(raw)
+            if value >= 0:
+                return value
+        except (TypeError, ValueError):
+            pass
+        warn("Please enter a whole number >= 0")
+
+
 def countdown_timer(total_seconds, label="Capturing"):
     """
     Live countdown with a progress bar.
@@ -453,11 +466,31 @@ def interactive_batch():
     section("Batch Mode — All Platforms × Stream Types")
 
     combos = [(p, st) for p in PLATFORMS for st in STREAM_TYPES]
-    total = len(combos)
+    runs_per_combo = {}
 
-    print(f"\n  This will run {BOLD}{total} captures{RESET}:")
+    print(f"\n  Platform/stream combinations:")
     for i, (p, st) in enumerate(combos, 1):
         print(f"    {i:2d}. {p:<12s}  {st}")
+
+    print("\n  Enter how many runs you want for each combination (0 = skip).")
+    for p, st in combos:
+        runs_per_combo[(p, st)] = prompt_non_negative_int(f"Runs for {p}/{st}", default=1)
+
+    run_plan = []
+    for p, st in combos:
+        count = runs_per_combo[(p, st)]
+        for run_idx in range(1, count + 1):
+            run_plan.append((p, st, run_idx, count))
+
+    total = len(run_plan)
+    if total == 0:
+        warn("All combinations were set to 0 runs. Nothing to do.")
+        return
+
+    print(f"\n  This will run {BOLD}{total} captures{RESET} in total:")
+    for p, st in combos:
+        count = runs_per_combo[(p, st)]
+        print(f"    - {p:<12s}  {st:<7s}  x{count}")
 
     duration_str = prompt("Duration per capture (seconds)", str(DEFAULT_DURATION))
     try:
@@ -475,23 +508,23 @@ def interactive_batch():
     completed = []
     skipped = []
 
-    for i, (platform, stream_type) in enumerate(combos, 1):
+    for i, (platform, stream_type, run_idx, run_total) in enumerate(run_plan, 1):
         print(f"\n{'═' * 60}")
-        print(f"  {BOLD}Run {i} / {total}{RESET}  —  {platform} / {stream_type}")
+        print(f"  {BOLD}Run {i} / {total}{RESET}  —  {platform} / {stream_type}  ({run_idx}/{run_total})")
         print(f"{'═' * 60}")
 
-        if not prompt_yn(f"Ready to capture {platform}/{stream_type}?"):
-            warn(f"Skipped {platform}/{stream_type}")
-            skipped.append((platform, stream_type))
+        if not prompt_yn(f"Ready to capture {platform}/{stream_type} ({run_idx}/{run_total})?"):
+            warn(f"Skipped {platform}/{stream_type} ({run_idx}/{run_total})")
+            skipped.append((platform, stream_type, run_idx, run_total))
             continue
 
         pcap_path = stage_capture(platform, stream_type, "", duration)
         if pcap_path:
             stage_extract(pcap_path)
-            completed.append((platform, stream_type, pcap_path))
+            completed.append((platform, stream_type, run_idx, run_total, pcap_path))
         else:
-            error(f"Capture failed for {platform}/{stream_type}")
-            skipped.append((platform, stream_type))
+            error(f"Capture failed for {platform}/{stream_type} ({run_idx}/{run_total})")
+            skipped.append((platform, stream_type, run_idx, run_total))
 
     # Final analysis across everything
     if completed:
@@ -503,12 +536,12 @@ def interactive_batch():
     print(f"  {BOLD}Batch Summary{RESET}")
     print(f"{'═' * 60}")
     print(f"  {GREEN}Completed: {len(completed)}{RESET}")
-    for p, st, path in completed:
-        print(f"    ✔  {p}/{st}  →  {os.path.basename(path)}")
+    for p, st, run_idx, run_total, path in completed:
+        print(f"    ✔  {p}/{st} ({run_idx}/{run_total})  →  {os.path.basename(path)}")
     if skipped:
         print(f"  {YELLOW}Skipped:   {len(skipped)}{RESET}")
-        for p, st in skipped:
-            print(f"    ⊘  {p}/{st}")
+        for p, st, run_idx, run_total in skipped:
+            print(f"    ⊘  {p}/{st} ({run_idx}/{run_total})")
     print()
 
 

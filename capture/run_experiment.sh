@@ -45,9 +45,35 @@ NETWORK_CONDITIONS=("baseline")
 PLATFORMS=("youtube" "twitch" "tiktok" "instagram")
 LOG_FILE="${SCRIPT_DIR}/../results/experiment_log_$(date +%Y%m%d_%H%M%S).txt"
 mkdir -p "${SCRIPT_DIR}/../results"
+declare -A RUNS_PER_COMBO
 
 log() {
     echo "$*" | tee -a "$LOG_FILE"
+}
+
+prompt_runs_per_combo() {
+    local key
+    local runs
+    local default_runs=1
+
+    log ""
+    log "Set how many runs you want for each platform / stream type combo."
+    log "Press ENTER to use default (${default_runs}) for any prompt."
+
+    for PLATFORM in "${PLATFORMS[@]}"; do
+        for STREAM_TYPE in "${STREAM_TYPES[@]}"; do
+            key="${PLATFORM}|${STREAM_TYPE}"
+            while true; do
+                read -r -p "Runs for ${PLATFORM} / ${STREAM_TYPE} [${default_runs}]: " runs
+                runs="${runs:-$default_runs}"
+                if [[ "$runs" =~ ^[0-9]+$ ]]; then
+                    RUNS_PER_COMBO["$key"]="$runs"
+                    break
+                fi
+                log "[!] Invalid run count '$runs'. Enter a whole number >= 0."
+            done
+        done
+    done
 }
 
 wait_for_user() {
@@ -70,8 +96,21 @@ log " Conditions    : ${NETWORK_CONDITIONS[*]}"
 log " Duration/run  : ${CAPTURE_DURATION}s"
 log "============================================"
 
-TOTAL=$(( ${#PLATFORMS[@]} * ${#STREAM_TYPES[@]} * ${#NETWORK_CONDITIONS[@]} ))
+prompt_runs_per_combo
+
+TOTAL_PER_CONDITION=0
+for PLATFORM in "${PLATFORMS[@]}"; do
+    for STREAM_TYPE in "${STREAM_TYPES[@]}"; do
+        TOTAL_PER_CONDITION=$(( TOTAL_PER_CONDITION + RUNS_PER_COMBO["${PLATFORM}|${STREAM_TYPE}"] ))
+    done
+done
+
+TOTAL=$(( TOTAL_PER_CONDITION * ${#NETWORK_CONDITIONS[@]} ))
 CURRENT=0
+
+log ""
+log " Planned runs per condition: $TOTAL_PER_CONDITION"
+log " Planned total runs        : $TOTAL"
 
 for CONDITION in "${NETWORK_CONDITIONS[@]}"; do
     log ""
@@ -88,51 +127,61 @@ for CONDITION in "${NETWORK_CONDITIONS[@]}"; do
 
     for PLATFORM in "${PLATFORMS[@]}"; do
         for STREAM_TYPE in "${STREAM_TYPES[@]}"; do
-            CURRENT=$(( CURRENT + 1 ))
-            SERVER_IP="${PLATFORM_IPS[$PLATFORM]:-""}"
-
-            log ""
-            log "--- Run $CURRENT / $TOTAL ---"
-            log " Platform    : $PLATFORM"
-            log " Stream type : $STREAM_TYPE  (dynamic=game/action, static=chat/talking)"
-            log " Condition   : $CONDITION"
-            log " Server IP   : ${SERVER_IP:-"(auto)"}"
-
-            # Describe the stream to open
-            if [[ "$STREAM_TYPE" == "dynamic" ]]; then
-                STREAM_DESC="a GAME or action stream (fast movement, high bitrate variation)"
-            else
-                STREAM_DESC="a CHAT or talking-head stream (mostly static, low bitrate variation)"
-            fi
-
-            if ! wait_for_user "Open ${PLATFORM} Live — find $STREAM_DESC — let it buffer fully, then press ENTER"; then
-                log "[SKIPPED] $PLATFORM / $STREAM_TYPE / $CONDITION"
+            RUNS_FOR_COMBO=${RUNS_PER_COMBO["${PLATFORM}|${STREAM_TYPE}"]}
+            if [[ "$RUNS_FOR_COMBO" -eq 0 ]]; then
+                log "[SKIPPED] $PLATFORM / $STREAM_TYPE / $CONDITION (0 planned runs)"
                 continue
             fi
 
-            log "[*] Starting capture at $(date)"
-            bash "${SCRIPT_DIR}/capture.sh" \
-                "$PLATFORM" \
-                "$SERVER_IP" \
-                "$CAPTURE_DURATION" \
-                "$STREAM_TYPE" \
-                2>&1 | tee -a "$LOG_FILE"
+            SERVER_IP="${PLATFORM_IPS[$PLATFORM]:-""}"
 
-            # Find the most recently created pcap for this platform
-            LATEST_PCAP=$(ls -t "${SCRIPT_DIR}/../data/${PLATFORM}_${STREAM_TYPE}_"*.pcap 2>/dev/null | head -1)
+            for RUN_INDEX in $(seq 1 "$RUNS_FOR_COMBO"); do
+                CURRENT=$(( CURRENT + 1 ))
 
-            if [[ -f "$LATEST_PCAP" ]]; then
-                log "[*] Extracting metrics from $LATEST_PCAP..."
-                sleep "$EXTRACTION_PAUSE"
-                bash "${SCRIPT_DIR}/../analysis/extract_metrics.sh" \
-                    "$LATEST_PCAP" \
+                log ""
+                log "--- Run $CURRENT / $TOTAL ---"
+                log " Platform    : $PLATFORM"
+                log " Stream type : $STREAM_TYPE  (dynamic=game/action, static=chat/talking)"
+                log " Condition   : $CONDITION"
+                log " Repeat      : ${RUN_INDEX} / ${RUNS_FOR_COMBO}"
+                log " Server IP   : ${SERVER_IP:-"(auto)"}"
+
+                # Describe the stream to open
+                if [[ "$STREAM_TYPE" == "dynamic" ]]; then
+                    STREAM_DESC="a GAME or action stream (fast movement, high bitrate variation)"
+                else
+                    STREAM_DESC="a CHAT or talking-head stream (mostly static, low bitrate variation)"
+                fi
+
+                if ! wait_for_user "Open ${PLATFORM} Live — find $STREAM_DESC — let it buffer fully, then press ENTER"; then
+                    log "[SKIPPED] $PLATFORM / $STREAM_TYPE / $CONDITION (repeat ${RUN_INDEX}/${RUNS_FOR_COMBO})"
+                    continue
+                fi
+
+                log "[*] Starting capture at $(date)"
+                bash "${SCRIPT_DIR}/capture.sh" \
+                    "$PLATFORM" \
+                    "$SERVER_IP" \
+                    "$CAPTURE_DURATION" \
+                    "$STREAM_TYPE" \
                     2>&1 | tee -a "$LOG_FILE"
-                log "[+] Extraction done."
-            else
-                log "[!] No pcap found for $PLATFORM / $STREAM_TYPE — skipping extraction."
-            fi
 
-            log "[+] Run $CURRENT complete."
+                # Find the most recently created pcap for this platform
+                LATEST_PCAP=$(ls -t "${SCRIPT_DIR}/../data/${PLATFORM}_${STREAM_TYPE}_"*.pcap 2>/dev/null | head -1)
+
+                if [[ -f "$LATEST_PCAP" ]]; then
+                    log "[*] Extracting metrics from $LATEST_PCAP..."
+                    sleep "$EXTRACTION_PAUSE"
+                    bash "${SCRIPT_DIR}/../analysis/extract_metrics.sh" \
+                        "$LATEST_PCAP" \
+                        2>&1 | tee -a "$LOG_FILE"
+                    log "[+] Extraction done."
+                else
+                    log "[!] No pcap found for $PLATFORM / $STREAM_TYPE — skipping extraction."
+                fi
+
+                log "[+] Run $CURRENT complete."
+            done
         done
     done
 
