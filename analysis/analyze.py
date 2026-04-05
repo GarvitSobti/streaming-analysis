@@ -51,6 +51,10 @@ PLATFORM_COLOURS = {
 
 STREAM_MARKERS = {"dynamic": "o", "static": "s"}
 
+PLATFORM_DISPLAY_NAMES = {
+    "tiktok": "Kick",
+}
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1.  Per-capture metric calculators
@@ -558,6 +562,9 @@ def plot_comparison(all_results: list[dict], output_dir: str, time_series_source
         print("[!] No results to plot.")
         return
 
+    def display_platform_name(platform: str) -> str:
+        return PLATFORM_DISPLAY_NAMES.get(platform, platform.capitalize())
+
     # ── Build a tidy summary DataFrame ───────────────────────────────────────
     rows = []
     for r in all_results:
@@ -581,7 +588,7 @@ def plot_comparison(all_results: list[dict], output_dir: str, time_series_source
 
     colours = [PLATFORM_COLOURS.get(p, "#888888") for p in df["platform"]]
     x = np.arange(len(df))
-    labels = df["label"].tolist()
+    labels = [f"{display_platform_name(p)}_{s}" for p, s in zip(df["platform"], df["stream_type"])]
 
     # ── Figure 1: 4-metric comparison ────────────────────────────────────────
     fig, axes = plt.subplots(2, 2, figsize=(14, 9))
@@ -657,7 +664,7 @@ def plot_comparison(all_results: list[dict], output_dir: str, time_series_source
                 continue
             colour = PLATFORM_COLOURS.get(r.get("platform", "unknown"), "#888888")
             t = np.array(br["series_index"]) * br.get("window_sec", 1)
-            ax.plot(t, br["series_kbps"], label=r["platform"],
+            ax.plot(t, br["series_kbps"], label=display_platform_name(r.get("platform", "unknown")),
                     color=colour, linewidth=1.2, alpha=0.85)
 
         ax.set_title(f"Bitrate over Time — {stream_type.capitalize()} Streams", fontsize=11)
