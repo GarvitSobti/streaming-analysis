@@ -1,128 +1,217 @@
 # Streaming Platform Network Analysis
 
-**CS204 Computer Networking**
+CS204 networking project for measuring audience-side performance of live streaming platforms under different stream types and network conditions.
 
-Comparing live streaming platform performance (YouTube Live, TikTok Live, Instagram Live, Twitch) from the **audience side**, across two stream types:
-- **Dynamic streams** (gaming content — high motion, variable bitrate)
-- **Static streams** (talk shows / live chats — low motion, stable bitrate)
+## What This Repo Does
 
-## Research Question
-
-> Which live video streaming platform has the best network performance?
-
-## Metrics
-
-| Metric | Definition | Tool |
-|---|---|---|
-| RTT | SYN → SYN-ACK time (TCP handshake) | tshark / Wireshark |
-| Inter-packet Jitter | Variance of frame inter-arrival times | tshark → Python |
-| Average Bitrate | Mean bits/second over 3-minute window | tshark → Python |
-| Bitrate Std Dev | Stability of the stream | tshark → Python |
-| Protocol | Transport layer protocol (TCP/QUIC/WebRTC) | Wireshark |
-
-## Platforms
-
-| Platform | Known Protocol | CDN |
-|---|---|---|
-| YouTube Live | QUIC (HTTP/3) or HLS over TLS | Google |
-| TikTok Live | WebRTC / HLS | Akamai / ByteDance |
-| Instagram Live | WebRTC | Meta |
-| Twitch | HLS over TCP | AWS CloudFront |
+1. Captures traffic for live streams with `tshark`.
+2. Extracts packet-level fields from `.pcap` files into CSV files.
+3. Computes RTT, handshake RTT, jitter, bitrate, and protocol split metrics.
+4. Produces per-capture JSON summaries, grouped averages, and comparison plots.
 
 ## Project Structure
 
 ```
 streaming-analysis/
+├── orchestrate.py            # Interactive end-to-end workflow
 ├── capture/
-│   ├── capture.sh            # headless tshark capture (5 min)
-│   ├── find_server.sh        # identify CDN IP via ss
-│   └── stress_test.sh        # tc/netem packet loss & jitter injection
+│   ├── capture.sh            # Capture packets for one platform/session
+│   ├── find_server.sh        # Quick server IP hint from active connections
+│   ├── identify_servers.sh   # Sample traffic and rank likely CDN IPs
+│   ├── run_experiment.sh     # Interactive runner for repeated experiments
+│   └── stress_network.sh     # Apply/remove tc netem impairments
 ├── analysis/
-│   ├── extract_metrics.py    # parse .pcap → RTT, jitter, bitrate CSV
-│   ├── compare_platforms.py  # aggregate comparison across all platforms
-│   └── visualize.py          # generate bar charts & time-series plots
-├── data/                     # .pcap files (gitignored, too large)
-├── results/                  # output CSVs and plots (gitignored)
-└── requirements.txt
+│   ├── extract_metrics.sh    # Convert pcap -> *_rtt/timing/handshake/protocols.csv
+│   └── analyze.py            # Compute metrics, JSON summaries, and plots
+├── data/                     # Raw packet captures (*.pcap)
+├── results/                  # CSV, JSON, and generated plots
+├── requirements.txt
+└── README.md
 ```
 
-## Setup
+## Metrics
 
-### Linux (required)
+- RTT from TCP ACK timing.
+- Handshake RTT from SYN/SYN-ACK pairs.
+- Jitter from inter-arrival variation on large frames.
+- Average bitrate over 1-second windows.
+- Bitrate stability using standard deviation and coefficient of variation.
+- Protocol split by bytes and packets, including TCP, UDP, and QUIC detection.
+
+## Requirements
+
+### System packages on Linux
+
 ```bash
-sudo apt update && sudo apt install tshark iproute2 curl
+sudo apt update
+sudo apt install -y tshark wireshark-common iproute2 dnsutils
+```
+
+Notes:
+- `tshark` and `capinfos` are used by the capture and extraction scripts.
+- `tc` from `iproute2` is required for `stress_network.sh`.
+- `host` from `dnsutils` is used by `identify_servers.sh`.
+
+### Python dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-### macOS (limited — no tc/netem)
+The analysis scripts use `numpy`, `pandas`, and `matplotlib`.
+
+## Quick Start
+
+### 1) Optional: identify the CDN server IP
+
+While the stream is already playing in your browser:
+
 ```bash
-brew install wireshark
-pip install -r requirements.txt
+bash capture/identify_servers.sh 30
 ```
 
-## Workflow
-
-### Phase 1: Capture
+If you want a faster manual hint:
 
 ```bash
-# 1. Find which network interface you're on
-ip link show
-
-# 2. Open browser, start the stream, then identify the CDN server IP
 bash capture/find_server.sh
-
-# 3. Run a 5-minute capture for each platform
-bash capture/capture.sh youtube eth0
-bash capture/capture.sh tiktok eth0
-bash capture/capture.sh instagram eth0
-bash capture/capture.sh twitch eth0
 ```
 
-### Phase 2: Stress Test (Optional)
+### 2) Capture traffic
 
 ```bash
-# Simulate bad network: 100ms latency + 5% packet loss
-bash capture/stress_test.sh add
-# ... run a capture ...
-bash capture/stress_test.sh remove
+bash capture/capture.sh <platform> <server_ip> [duration_seconds] [stream_type]
 ```
 
-### Phase 3: Analysis
+Supported platforms:
+
+- `youtube`
+- `twitch`
+- `tiktok`
+- `instagram`
+
+Supported stream types:
+
+- `dynamic`
+- `static`
+
+Examples:
 
 ```bash
-# Extract RTT, jitter, bitrate from all pcap files
-python analysis/extract_metrics.py
-
-# Compare all platforms
-python analysis/compare_platforms.py
-
-# Generate plots
-python analysis/visualize.py
+bash capture/capture.sh youtube 142.250.1.1 300 dynamic
+bash capture/capture.sh twitch 151.101.1.1 300 static
+bash capture/capture.sh tiktok "" 300 dynamic
 ```
 
-## Experiment Protocol
+If the server IP is unknown, pass an empty string and the script captures all TCP/UDP traffic.
 
-1. Close all non-essential apps (Spotify, Discord, updates)
-2. Use a wired connection where possible
-3. Select a **1080p stream** that has been live for >30 minutes
-4. Let stream run for **3 minutes** in steady state before capturing
-5. Capture for exactly **5 minutes**
-6. Repeat for both stream types (gaming vs talk/chat)
-7. Repeat 3 times per platform per stream type for statistical validity
+The capture is saved in `data/` as:
+
+`<platform>_<stream_type>_<timestamp>.pcap`
+
+### 3) Extract CSV metrics from a pcap
+
+```bash
+bash analysis/extract_metrics.sh data/<capture>.pcap results
+```
+
+This produces:
+
+- `<name>_rtt.csv`
+- `<name>_timing.csv`
+- `<name>_handshake.csv`
+- `<name>_protocols.csv`
+
+### 4) Analyze the extracted metrics
+
+Single capture mode:
+
+```bash
+python analysis/analyze.py single \
+  --rtt results/<name>_rtt.csv \
+  --timing results/<name>_timing.csv \
+  --handshake results/<name>_handshake.csv \
+  --protocols results/<name>_protocols.csv \
+  --label youtube_dynamic \
+  --results results
+```
+
+Auto mode, which discovers every capture set in `results/`:
+
+```bash
+python analysis/analyze.py auto --results results
+```
+
+Auto mode writes:
+
+- Per-capture `*_metrics.json`
+- `results/platform_stream_averages.json`
+- `results/comparison_metrics.png`
+- `results/comparison_protocols.png`
+- `results/comparison_bitrate_timeseries.png`
+
+## End-to-End Orchestration
+
+For a guided workflow, use the Python orchestrator:
+
+```bash
+python orchestrate.py
+```
+
+It provides menu options for single capture, batch capture, re-analysis of existing results, and CDN server identification.
+
+Useful direct modes:
+
+```bash
+python orchestrate.py --batch
+python orchestrate.py --analyze-only
+```
+
+For repeated scripted runs, you can also use:
+
+```bash
+bash capture/run_experiment.sh
+```
+
+Before using `run_experiment.sh`, edit its config section to set run counts, stream types, duration, and any known platform IPs. It logs each run to `results/experiment_log_*.txt`.
+
+## Optional Network Impairment
+
+Use `tc netem` to apply or clear network conditions:
+
+```bash
+bash capture/stress_network.sh status
+bash capture/stress_network.sh loss5
+bash capture/stress_network.sh delay100
+bash capture/stress_network.sh combined
+bash capture/stress_network.sh reset
+```
+
+Supported conditions:
+
+- `baseline`
+- `loss5`
+- `delay100`
+- `combined`
+- `reset`
+- `status`
+
+## Suggested Experimental Protocol
+
+1. Close all non-essential apps.
+2. Use a wired connection where possible.
+3. Select a 1080p stream that has been live for at least 30 minutes.
+4. Let the stream stabilize before capturing.
+5. Capture for a fixed duration across all runs.
+6. Repeat for both stream types.
+7. Repeat multiple times per platform for statistical validity.
 
 ## Limitations
 
-- Single geographic measurement point
-- CDN edge node varies — re-run on different days may hit different servers
-- Ads create separate connections — filter by `frame.len > 1200` to isolate video
-- Encrypted streams (QUIC/TLS) limit deep packet inspection; use frame-level metrics
+- Single geographic measurement point.
+- CDN edge nodes vary between runs, so repeated captures may hit different servers.
+- Ads can create separate connections, which can affect filtering and interpretation.
+- Encrypted streams limit deep packet inspection, so several metrics are frame-level rather than payload-level.
 
-
-## Links to videos
+## Test Videos
 Dynamic video: https://www.youtube.com/watch?v=O3zmfntbSr8&t=600s
 Static video: https://www.youtube.com/live/OChp0jbyEbI?si=TYy555bRWdEuXad-&t=4200
-
-
-## Links to platforms
-Twitch: https://www.twitch.tv/raylight0331
-Youtube: [rtmp://a.rtmp.youtube.com/live2](https://youtube.com/live/Dvm-M6AP9Zg?feature=share)
